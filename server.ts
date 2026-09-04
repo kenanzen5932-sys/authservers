@@ -53,6 +53,15 @@ function adminAuth(req: express.Request, res: express.Response, next: express.Ne
   next();
 }
 
+// ─── Health Check & Keep-Alive ───
+app.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'ok', uptime: process.uptime(), timestamp: Date.now() });
+});
+
+app.get('/', (_req, res) => {
+  res.send('OK');
+});
+
 // ─── Public: Token doğrulama (Desktop uygulaması kullanır) ───
 
 app.post('/api/token/verify', (req, res) => {
