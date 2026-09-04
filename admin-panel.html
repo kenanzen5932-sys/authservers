@@ -67,8 +67,12 @@
       font-weight: 600;
     }
     .badge-active { background: #166534; color: #86efac; }
+    .badge-online { background: #14532d; color: #4ade80; border: 1px solid #22c55e; box-shadow: 0 0 8px rgba(34, 197, 94, 0.4); }
+    .badge-offline { background: #334155; color: #94a3b8; }
     .badge-revoked { background: #991b1b; color: #fca5a5; }
     .badge-expired { background: #713f12; color: #fde68a; }
+    button.msg { background: #0284c7; color: #fff; }
+    button.msg:hover { background: #38bdf8; color: #0f172a; }
     .toast {
       position: fixed; bottom: 20px; right: 20px;
       padding: 12px 24px; border-radius: 8px;
@@ -137,19 +141,37 @@
     </div>
 
     <div class="card">
-      <h2>Aktif Token'lar</h2>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h2 style="margin:0;">Kullanıcı Token'ları</h2>
+        <button class="small" onclick="loadAll()" style="background:#334155;color:#e2e8f0;">🔄 Yenile</button>
+      </div>
       <table>
         <thead>
           <tr>
             <th>Kullanıcı</th>
             <th>Oluşturulma</th>
             <th>Son Kullanma</th>
-            <th>Son Giriş</th>
-            <th>Durum</th>
-            <th>İşlem</th>
+            <th>Son Sinyal (Görülme)</th>
+            <th>Canlı Durum</th>
+            <th>İşlemler</th>
           </tr>
         </thead>
         <tbody id="tokenTable"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>📊 Canlı Giriş-Çıkış & Hareket Geçmişi</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Kullanıcı</th>
+            <th>İşlem / Hareket</th>
+            <th>IP Adresi</th>
+            <th>Tarih & Saat</th>
+          </tr>
+        </thead>
+        <tbody id="activityTable"></tbody>
       </table>
     </div>
   </div>
@@ -237,6 +259,10 @@
       navigator.clipboard.writeText(token).then(() => showToast('Token kopyalandı!'));
     }
 
+    async function loadAll() {
+      await Promise.all([loadTokens(), loadActivityLogs()]);
+    }
+
     async function loadTokens() {
       const tokens = await api('GET', '/api/admin/tokens');
       if (tokens.error) return;
@@ -244,26 +270,59 @@
       tbody.innerHTML = tokens.map(t => {
         const now = Date.now();
         let status, badgeClass;
-        if (t.revoked) { status = 'İptal'; badgeClass = 'badge-revoked'; }
-        else if (now > t.expires_at) { status = 'Süresi Doldu'; badgeClass = 'badge-expired'; }
-        else { status = 'Aktif'; badgeClass = 'badge-active'; }
+        if (t.revoked) { status = '🔴 İptal Edildi'; badgeClass = 'badge-revoked'; }
+        else if (now > t.expires_at) { status = '⏱️ Süresi Doldu'; badgeClass = 'badge-expired'; }
+        else if (t.isOnline) { status = '🟢 Çevrimiçi (Açık)'; badgeClass = 'badge-online'; }
+        else { status = '⚪ Çevrimdışı'; badgeClass = 'badge-offline'; }
 
         const canExtend = !t.revoked && now < t.expires_at;
         const canRevoke = !t.revoked && now < t.expires_at;
 
         return `<tr>
-          <td>${t.label}</td>
+          <td><strong>${t.label}</strong></td>
           <td>${new Date(t.created_at).toLocaleString('tr-TR')}</td>
           <td>${new Date(t.expires_at).toLocaleString('tr-TR')}</td>
-          <td>${t.last_used_at ? new Date(t.last_used_at).toLocaleString('tr-TR') : 'Hiç'}</td>
+          <td>${t.last_used_at ? new Date(t.last_used_at).toLocaleString('tr-TR') : 'Hiç giriş yapmadı'}</td>
           <td><span class="badge ${badgeClass}">${status}</span></td>
           <td>
-            ${canExtend ? `<button class="small" onclick="extendToken('${t.id}')">+7 Gün</button> ` : ''}
-            ${canRevoke ? `<button class="small danger" onclick="revokeToken('${t.id}')">İptal</button> ` : ''}
+            <button class="small msg" onclick="sendMessagePrompt('${t.id}', '${t.label}')">💬 Mesaj</button>
+            ${canExtend ? `<button class="small" onclick="extendToken('${t.id}')">+7 Gün</button>` : ''}
+            ${canRevoke ? `<button class="small danger" onclick="revokeToken('${t.id}')">İptal</button>` : ''}
             <button class="small danger" style="background:#7f1d1d;" onclick="deleteToken('${t.id}', '${t.label}')">Sil</button>
           </td>
         </tr>`;
       }).join('');
+    }
+
+    async function loadActivityLogs() {
+      try {
+        const logs = await api('GET', '/api/admin/activity');
+        if (logs.error) return;
+        const tbody = document.getElementById('activityTable');
+        if (logs.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#64748b;">Henüz hareket kaydı yok</td></tr>';
+          return;
+        }
+        tbody.innerHTML = logs.map(l => `<tr>
+          <td><strong>${l.label || 'Bilinmiyor'}</strong></td>
+          <td>${l.action}</td>
+          <td><code style="font-size:12px;">${l.ip || '-'}</code></td>
+          <td>${new Date(l.timestamp).toLocaleString('tr-TR')}</td>
+        </tr>`).join('');
+      } catch {}
+    }
+
+    async function sendMessagePrompt(id, label) {
+      const msg = prompt(`"${label}" kullanıcısının ekranına gönderilecek uyarı mesajını yazın:`);
+      if (!msg || !msg.trim()) return;
+      try {
+        const result = await api('POST', '/api/admin/token/message', { id, message: msg.trim() });
+        if (result.error) { showToast(result.error, false); return; }
+        showToast(`"${label}" kullanıcısına mesaj iletildi!`);
+        loadActivityLogs();
+      } catch (e) {
+        showToast('Mesaj gönderilemedi', false);
+      }
     }
 
     async function extendToken(id) {
@@ -271,7 +330,7 @@
       const result = await api('POST', '/api/admin/token/extend', { id, expiresIn: '7d' });
       if (result.error) { showToast(result.error, false); return; }
       showToast('Süre uzatıldı!');
-      loadTokens();
+      loadAll();
     }
 
     async function revokeToken(id) {
@@ -279,7 +338,7 @@
       const result = await api('POST', '/api/admin/token/revoke', { id });
       if (result.error) { showToast(result.error, false); return; }
       showToast('Token iptal edildi! Kullanıcı sistemden atılacak.');
-      loadTokens();
+      loadAll();
     }
 
     async function deleteToken(id, label) {
@@ -287,8 +346,13 @@
       const result = await api('POST', '/api/admin/token/delete', { id });
       if (result.error) { showToast(result.error, false); return; }
       showToast('Token tamamen silindi! Kullanıcı sistemden atılacak.');
-      loadTokens();
+      loadAll();
     }
+
+    // Her 10 saniyede bir çevrimiçi durumlarını ve logları canlı güncelle
+    setInterval(() => {
+      if (adminToken) loadAll();
+    }, 10000);
   </script>
 </body>
 </html>

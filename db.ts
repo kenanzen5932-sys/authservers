@@ -47,6 +47,16 @@ export async function initDb(): Promise<void> {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token_id TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      delivered_at INTEGER
+    )
+  `);
+
   saveDb();
 }
 
@@ -132,6 +142,29 @@ export function getUsageLogs(limit = 200): Record<string, unknown>[] {
   return rows[0].values.map((row: unknown[]) =>
     rowToObjFromValues(['id', 'token_id', 'action', 'ip', 'timestamp', 'label'], row)
   );
+}
+
+export function addMessageForToken(tokenId: string, message: string): void {
+  db.run(
+    'INSERT INTO messages (token_id, message, created_at) VALUES (?, ?, ?)',
+    [tokenId, message, Date.now()]
+  );
+  saveDb();
+}
+
+export function getPendingMessageForToken(tokenId: string): { id: number; message: string } | null {
+  const rows = db.exec(
+    'SELECT id, message FROM messages WHERE token_id = ? AND delivered_at IS NULL ORDER BY id ASC LIMIT 1',
+    [tokenId]
+  );
+  if (rows.length === 0 || rows[0].values.length === 0) return null;
+  const val = rows[0].values[0];
+  return { id: val[0] as number, message: val[1] as string };
+}
+
+export function markMessageDelivered(messageId: number): void {
+  db.run('UPDATE messages SET delivered_at = ? WHERE id = ?', [Date.now(), messageId]);
+  saveDb();
 }
 
 // SQL.js her sütunu typed array'e çeviriyor, row'ı objeye çevirelim

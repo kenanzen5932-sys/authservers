@@ -16,7 +16,10 @@ import {
   extendTokenById,
   updateLastUsed,
   insertUsageLog,
-  getUsageLogs
+  getUsageLogs,
+  addMessageForToken,
+  getPendingMessageForToken,
+  markMessageDelivered
 } from './db.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -140,10 +143,30 @@ app.post('/api/token/heartbeat', (req, res) => {
     }
 
     updateLastUsed(Date.now(), record.id as string);
-    res.json({ active: true });
+
+    // Varsa bekleyen yönetici mesajını ilet
+    const pendingMsg = getPendingMessageForToken(record.id as string);
+    if (pendingMsg) {
+      markMessageDelivered(pendingMsg.id);
+      res.json({ active: true, message: pendingMsg.message });
+    } else {
+      res.json({ active: true });
+    }
   } catch (_e) {
     res.json({ active: false, reason: 'Geçersiz veya süresi dolmuş oturum' });
   }
+});
+
+// ─── Public: Desktop çıkış logu ───
+app.post('/api/token/logout', (req, res) => {
+  const { jwt: tokenJwt } = req.body;
+  if (tokenJwt) {
+    try {
+      const decoded = jwt.verify(tokenJwt, JWT_SECRET) as { tokenId: string };
+      insertUsageLog(decoded.tokenId, 'Çıkış yaptı (Uygulama kapandı)', req.ip || 'unknown', Date.now());
+    } catch {}
+  }
+  res.json({ ok: true });
 });
 
 // ─── Admin: Token oluştur ───
@@ -161,6 +184,7 @@ app.post('/api/admin/token/create', adminAuth, (req, res) => {
   const expiresAt = parseExpiry(expiresIn || DEFAULT_EXPIRY);
 
   insertToken(id, label, hash, Date.now(), expiresAt);
+  insertUsageLog(id, 'Token oluşturuldu', 'admin', Date.now());
 
   res.json({
     id,
@@ -171,11 +195,34 @@ app.post('/api/admin/token/create', adminAuth, (req, res) => {
   });
 });
 
-// ─── Admin: Tüm token'ları listele ───
+// ─── Admin: Tüm token'ları listele (Online durumu ile) ───
 
 app.get('/api/admin/tokens', adminAuth, (_req, res) => {
   const tokens = getAllTokens();
-  res.json(tokens);
+  const now = Date.now();
+  const result = tokens.map(t => ({
+    ...t,
+    isOnline: !t.revoked && t.last_used_at ? (now - (t.last_used_at as number)) < 60000 : false
+  }));
+  res.json(result);
+});
+
+// ─── Admin: Token sahibine canlı mesaj gönder ───
+app.post('/api/admin/token/message', adminAuth, (req, res) => {
+  const { id, message } = req.body;
+  if (!id || !message) {
+    res.status(400).json({ error: 'Token ID ve mesaj gerekli' });
+    return;
+  }
+  addMessageForToken(id, message);
+  insertUsageLog(id, `Mesaj gönderildi: "${message.slice(0, 30)}"`, 'admin', Date.now());
+  res.json({ success: true });
+});
+
+// ─── Admin: Son aktiviteler / Giriş-çıkış logları ───
+app.get('/api/admin/activity', adminAuth, (_req, res) => {
+  const logs = getUsageLogs(50);
+  res.json(logs);
 });
 
 // ─── Admin: Token iptal et ───
@@ -187,7 +234,7 @@ app.post('/api/admin/token/revoke', adminAuth, (req, res) => {
     return;
   }
   revokeTokenById(id);
-  insertUsageLog(id, 'revoked', 'admin', Date.now());
+  insertUsageLog(id, 'Token iptal edildi', 'admin', Date.now());
   res.json({ success: true });
 });
 
