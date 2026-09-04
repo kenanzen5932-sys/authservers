@@ -1,0 +1,193 @@
+import express from 'express';
+import cors from 'cors';
+import path from 'node:path';
+import { existsSync } from 'node:fs';
+import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
+import { v4 as uuidv4 } from 'uuid';
+import {
+  initDb,
+  insertToken,
+  getTokenByHash,
+  getAllTokens,
+  revokeTokenById,
+  extendTokenById,
+  updateLastUsed,
+  insertUsageLog,
+  getUsageLogs
+} from './db.js';
+
+const PORT = parseInt(process.env.PORT || '3001', 10);
+const JWT_SECRET = process.env.JWT_SECRET || 'change-this-to-a-random-secret-string';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+const DEFAULT_EXPIRY = process.env.TOKEN_DEFAULT_EXPIRY || '7d';
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+function parseExpiry(value: string): number {
+  const match = value.match(/^(\d+)([hdm])$/);
+  if (!match) throw new Error('Geçersiz süre formatı. Örn: 24h, 7d, 30m');
+  const num = parseInt(match[1], 10);
+  const unit = match[2];
+  const multipliers: Record<string, number> = { m: 60 * 1000, h: 3600 * 1000, d: 86400 * 1000 };
+  return Date.now() + num * multipliers[unit];
+}
+
+function hashToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function adminAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'Yetkisiz erişim' });
+    return;
+  }
+  const token = authHeader.slice(7);
+  if (token !== ADMIN_PASSWORD) {
+    res.status(401).json({ error: 'Geçersiz admin şifresi' });
+    return;
+  }
+  next();
+}
+
+// ─── Public: Token doğrulama (Desktop uygulaması kullanır) ───
+
+app.post('/api/token/verify', (req, res) => {
+  const { token } = req.body;
+  if (!token) {
+    res.status(400).json({ valid: false, error: 'Token gerekli' });
+    return;
+  }
+
+  const hash = hashToken(token);
+  const record = getTokenByHash(hash);
+
+  if (!record) {
+    res.json({ valid: false, error: 'Geçersiz token' });
+    return;
+  }
+
+  if (record.revoked) {
+    res.json({ valid: false, error: 'Token iptal edilmiş' });
+    return;
+  }
+
+  if (Date.now() > (record.expires_at as number)) {
+    res.json({ valid: false, error: 'Token süresi dolmuş' });
+    return;
+  }
+
+  // Token geçerli → JWT üret
+  const jwtToken = jwt.sign(
+    { tokenId: record.id, label: record.label },
+    JWT_SECRET,
+    { expiresIn: Math.floor(((record.expires_at as number) - Date.now()) / 1000) }
+  );
+
+  updateLastUsed(Date.now(), record.id as string);
+  insertUsageLog(record.id as string, 'login', req.ip || 'unknown', Date.now());
+
+  res.json({
+    valid: true,
+    jwt: jwtToken,
+    expiresAt: record.expires_at,
+    label: record.label
+  });
+});
+
+// ─── Admin: Token oluştur ───
+
+app.post('/api/admin/token/create', adminAuth, (req, res) => {
+  const { label, expiresIn } = req.body;
+  if (!label) {
+    res.status(400).json({ error: 'Etiket (label) gerekli. Örn: "Ahmet"' });
+    return;
+  }
+
+  const rawToken = uuidv4() + '-' + crypto.randomBytes(24).toString('base64url');
+  const hash = hashToken(rawToken);
+  const id = uuidv4();
+  const expiresAt = parseExpiry(expiresIn || DEFAULT_EXPIRY);
+
+  insertToken(id, label, hash, Date.now(), expiresAt);
+
+  res.json({
+    id,
+    label,
+    token: rawToken,
+    expiresAt,
+    createdAt: Date.now()
+  });
+});
+
+// ─── Admin: Tüm token'ları listele ───
+
+app.get('/api/admin/tokens', adminAuth, (_req, res) => {
+  const tokens = getAllTokens();
+  res.json(tokens);
+});
+
+// ─── Admin: Token iptal et ───
+
+app.post('/api/admin/token/revoke', adminAuth, (req, res) => {
+  const { id } = req.body;
+  if (!id) {
+    res.status(400).json({ error: 'Token ID gerekli' });
+    return;
+  }
+  revokeTokenById(id);
+  insertUsageLog(id, 'revoked', 'admin', Date.now());
+  res.json({ success: true });
+});
+
+// ─── Admin: Token süresini uzat ───
+
+app.post('/api/admin/token/extend', adminAuth, (req, res) => {
+  const { id, expiresIn } = req.body;
+  if (!id || !expiresIn) {
+    res.status(400).json({ error: 'Token ID ve expiresIn gerekli' });
+    return;
+  }
+  const newExpiry = parseExpiry(expiresIn);
+  extendTokenById(newExpiry, id);
+  insertUsageLog(id, 'extended', 'admin', Date.now());
+  res.json({ success: true, expiresAt: newExpiry });
+});
+
+// ─── Admin: Kullanım loglarını getir ───
+
+app.get('/api/admin/logs', adminAuth, (_req, res) => {
+  const logs = getUsageLogs(200);
+  res.json(logs);
+});
+
+// ─── Admin Panel sayfası ───
+
+const adminPanelPath = [
+  path.resolve(import.meta.dirname, 'admin-panel.html'),
+  path.resolve(import.meta.dirname, '../admin-panel.html')
+].find((filePath) => existsSync(filePath));
+
+app.get('/admin', (_req, res) => {
+  if (!adminPanelPath) {
+    res.status(500).send('Admin panel dosyası bulunamadı');
+    return;
+  }
+  res.sendFile(adminPanelPath);
+});
+
+// ─── Başlat ───
+
+async function start() {
+  await initDb();
+  app.listen(PORT, () => {
+    console.log(`Auth server http://localhost:${PORT} adresinde çalışıyor`);
+    console.log(`Admin panel: http://localhost:${PORT}/admin`);
+    console.log(`Admin şifresi: ${ADMIN_PASSWORD}`);
+  });
+}
+
+start();

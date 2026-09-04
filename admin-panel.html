@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Never Hacked - Token Yönetim Paneli</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 24px; margin-bottom: 24px; color: #38bdf8; }
+    .card {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      border: 1px solid #334155;
+    }
+    .card h2 { font-size: 18px; margin-bottom: 16px; color: #94a3b8; }
+    .form-row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+    input, select, button {
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: 1px solid #475569;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-size: 14px;
+    }
+    input:focus, select:focus { outline: none; border-color: #38bdf8; }
+    button {
+      background: #38bdf8;
+      color: #0f172a;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #7dd3fc; }
+    button.danger { background: #ef4444; color: #fff; }
+    button.danger:hover { background: #f87171; }
+    button.small { padding: 6px 12px; font-size: 12px; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 12px 8px; border-bottom: 1px solid #334155; }
+    th { color: #94a3b8; font-weight: 600; }
+    .token-value {
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      background: #0f172a;
+      padding: 4px 8px;
+      border-radius: 4px;
+      word-break: break-all;
+      max-width: 200px;
+      display: inline-block;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .badge-active { background: #166534; color: #86efac; }
+    .badge-revoked { background: #991b1b; color: #fca5a5; }
+    .badge-expired { background: #713f12; color: #fde68a; }
+    .toast {
+      position: fixed; bottom: 20px; right: 20px;
+      padding: 12px 24px; border-radius: 8px;
+      font-weight: 600; font-size: 14px;
+      animation: slideUp 0.3s ease-out;
+      z-index: 1000;
+    }
+    .toast-success { background: #166534; color: #86efac; }
+    .toast-error { background: #991b1b; color: #fca5a5; }
+    @keyframes slideUp {
+      from { transform: translateY(20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .login-overlay {
+      position: fixed; inset: 0;
+      background: #0f172a;
+      display: flex; align-items: center; justify-content: center;
+      z-index: 1001;
+    }
+    .login-box { text-align: center; }
+    .login-box input { margin-bottom: 12px; width: 250px; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="login-overlay" id="loginOverlay">
+    <div class="login-box">
+      <h1>Never Hacked - Token Yönetim Paneli</h1>
+      <input type="password" id="adminPassword" placeholder="Admin şifresi" autofocus>
+      <br>
+      <button onclick="login()">Giriş Yap</button>
+      <p id="loginError" style="color:#f87171;margin-top:8px;"></p>
+    </div>
+  </div>
+
+  <div class="container hidden" id="mainContent">
+    <h1>Never Hacked - Token Yönetim Paneli</h1>
+
+    <div class="card">
+      <h2>Yeni Token Oluştur</h2>
+      <div class="form-row">
+        <input type="text" id="newLabel" placeholder="Kullanıcı adı / etiket (örn: Ahmet)">
+        <select id="newExpiry">
+          <option value="1h">1 Saat</option>
+          <option value="24h">24 Saat</option>
+          <option value="7d" selected>7 Gün</option>
+          <option value="30d">30 Gün</option>
+          <option value="90d">90 Gün</option>
+          <option value="365d">1 Yıl</option>
+        </select>
+        <input type="text" id="customExpiry" placeholder="Özel: 3h, 14d, 60m..." style="width:120px;">
+        <button onclick="createToken()">Oluştur</button>
+      </div>
+    </div>
+
+    <div class="card" id="resultCard" style="display:none;">
+      <h2>Oluşturulan Token</h2>
+      <p><strong>Kullanıcı:</strong> <span id="resultLabel"></span></p>
+      <p><strong>Token:</strong> <code class="token-value" id="resultToken"></code></p>
+      <p><strong>Son kullanma:</strong> <span id="resultExpiry"></span></p>
+      <button onclick="copyToken()" style="margin-top:8px;">Kopyala</button>
+      <p style="color:#fbbf24;margin-top:8px;font-size:13px;">⚠️ Bu token'ı güvenli bir şekilde arkadaşına ilet. Bir daha gösterilmeyecek!</p>
+    </div>
+
+    <div class="card">
+      <h2>Aktif Token'lar</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Kullanıcı</th>
+            <th>Oluşturulma</th>
+            <th>Son Kullanma</th>
+            <th>Son Giriş</th>
+            <th>Durum</th>
+            <th>İşlem</th>
+          </tr>
+        </thead>
+        <tbody id="tokenTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="toastContainer"></div>
+
+  <script>
+    let adminToken = '';
+
+    function showToast(msg, success = true) {
+      const el = document.createElement('div');
+      el.className = `toast ${success ? 'toast-success' : 'toast-error'}`;
+      el.textContent = msg;
+      document.getElementById('toastContainer').appendChild(el);
+      setTimeout(() => el.remove(), 3000);
+    }
+
+    function api(method, path, body = null) {
+      const opts = {
+        method,
+        headers: { 'Content-Type': 'application/json' }
+      };
+      if (adminToken) opts.headers['Authorization'] = 'Bearer ' + adminToken;
+      if (body) opts.body = JSON.stringify(body);
+      return fetch(path, opts).then(r => r.json());
+    }
+
+    async function login() {
+      const pw = document.getElementById('adminPassword').value;
+      adminToken = pw;
+      try {
+        const result = await api('GET', '/api/admin/tokens');
+        if (result.error) throw new Error(result.error);
+        document.getElementById('loginOverlay').classList.add('hidden');
+        document.getElementById('mainContent').classList.remove('hidden');
+        loadTokens();
+      } catch (e) {
+        document.getElementById('loginError').textContent = 'Hatalı şifre!';
+        adminToken = '';
+      }
+    }
+
+    document.getElementById('adminPassword').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') login();
+    });
+
+    async function createToken() {
+      const label = document.getElementById('newLabel').value.trim();
+      if (!label) { showToast('Kullanıcı adı girin!', false); return; }
+      const custom = document.getElementById('customExpiry').value.trim();
+      const expiresIn = custom || document.getElementById('newExpiry').value;
+
+      try {
+        const result = await api('POST', '/api/admin/token/create', { label, expiresIn });
+        if (result.error) { showToast(result.error, false); return; }
+        document.getElementById('resultCard').style.display = 'block';
+        document.getElementById('resultLabel').textContent = result.label;
+        document.getElementById('resultToken').textContent = result.token;
+        document.getElementById('resultExpiry').textContent = new Date(result.expiresAt).toLocaleString('tr-TR');
+        showToast('Token oluşturuldu!');
+        loadTokens();
+      } catch (e) { showToast('Hata oluştu', false); }
+    }
+
+    function copyToken() {
+      const token = document.getElementById('resultToken').textContent;
+      navigator.clipboard.writeText(token).then(() => showToast('Token kopyalandı!'));
+    }
+
+    async function loadTokens() {
+      const tokens = await api('GET', '/api/admin/tokens');
+      if (tokens.error) return;
+      const tbody = document.getElementById('tokenTable');
+      tbody.innerHTML = tokens.map(t => {
+        const now = Date.now();
+        let status, badgeClass;
+        if (t.revoked) { status = 'İptal'; badgeClass = 'badge-revoked'; }
+        else if (now > t.expires_at) { status = 'Süresi Doldu'; badgeClass = 'badge-expired'; }
+        else { status = 'Aktif'; badgeClass = 'badge-active'; }
+
+        const canExtend = !t.revoked && now < t.expires_at;
+        const canRevoke = !t.revoked && now < t.expires_at;
+
+        return `<tr>
+          <td>${t.label}</td>
+          <td>${new Date(t.created_at).toLocaleString('tr-TR')}</td>
+          <td>${new Date(t.expires_at).toLocaleString('tr-TR')}</td>
+          <td>${t.last_used_at ? new Date(t.last_used_at).toLocaleString('tr-TR') : 'Hiç'}</td>
+          <td><span class="badge ${badgeClass}">${status}</span></td>
+          <td>
+            ${canExtend ? `<button class="small" onclick="extendToken('${t.id}')">+7 Gün</button> ` : ''}
+            ${canRevoke ? `<button class="small danger" onclick="revokeToken('${t.id}')">İptal</button>` : ''}
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function extendToken(id) {
+      if (!confirm('Token süresi 7 gün uzatılsın mı?')) return;
+      const result = await api('POST', '/api/admin/token/extend', { id, expiresIn: '7d' });
+      if (result.error) { showToast(result.error, false); return; }
+      showToast('Süre uzatıldı!');
+      loadTokens();
+    }
+
+    async function revokeToken(id) {
+      if (!confirm('Bu token iptal edilsin mi? Kullanıcı bir daha giriş yapamaz.')) return;
+      const result = await api('POST', '/api/admin/token/revoke', { id });
+      if (result.error) { showToast(result.error, false); return; }
+      showToast('Token iptal edildi!');
+      loadTokens();
+    }
+  </script>
+</body>
+</html>
