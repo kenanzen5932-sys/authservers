@@ -9,6 +9,8 @@ import {
   initDb,
   insertToken,
   getTokenByHash,
+  getTokenById,
+  deleteTokenById,
   getAllTokens,
   revokeTokenById,
   extendTokenById,
@@ -107,6 +109,43 @@ app.post('/api/token/verify', (req, res) => {
   });
 });
 
+// ─── Canlılık / Oturum Kontrolü (Desktop uygulaması her 30sn çağırır) ───
+app.post('/api/token/heartbeat', (req, res) => {
+  const { jwt: tokenJwt } = req.body;
+  const authHeader = req.headers.authorization;
+  const rawJwt = tokenJwt || (authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null);
+
+  if (!rawJwt) {
+    res.json({ active: false, reason: 'Oturum verisi bulunamadı' });
+    return;
+  }
+
+  try {
+    const decoded = jwt.verify(rawJwt, JWT_SECRET) as { tokenId: string; label: string };
+    const record = getTokenById(decoded.tokenId);
+
+    if (!record) {
+      res.json({ active: false, reason: 'Token yönetici tarafından silindi' });
+      return;
+    }
+
+    if (record.revoked) {
+      res.json({ active: false, reason: 'Token yönetici tarafından iptal edildi' });
+      return;
+    }
+
+    if (Date.now() > (record.expires_at as number)) {
+      res.json({ active: false, reason: 'Token süresi doldu' });
+      return;
+    }
+
+    updateLastUsed(Date.now(), record.id as string);
+    res.json({ active: true });
+  } catch (_e) {
+    res.json({ active: false, reason: 'Geçersiz veya süresi dolmuş oturum' });
+  }
+});
+
 // ─── Admin: Token oluştur ───
 
 app.post('/api/admin/token/create', adminAuth, (req, res) => {
@@ -149,6 +188,17 @@ app.post('/api/admin/token/revoke', adminAuth, (req, res) => {
   }
   revokeTokenById(id);
   insertUsageLog(id, 'revoked', 'admin', Date.now());
+  res.json({ success: true });
+});
+
+// ─── Admin: Token'ı tamamen sil ───
+app.post('/api/admin/token/delete', adminAuth, (req, res) => {
+  const { id } = req.body;
+  if (!id) {
+    res.status(400).json({ error: 'Token ID gerekli' });
+    return;
+  }
+  deleteTokenById(id);
   res.json({ success: true });
 });
 

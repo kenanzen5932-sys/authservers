@@ -105,7 +105,10 @@
   </div>
 
   <div class="container hidden" id="mainContent">
-    <h1>Never Hacked - Token Yönetim Paneli</h1>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
+      <h1 style="margin:0;">Never Hacked - Token Yönetim Paneli</h1>
+      <button onclick="logoutAdmin()" class="small danger">Çıkış Yap</button>
+    </div>
 
     <div class="card">
       <h2>Yeni Token Oluştur</h2>
@@ -174,20 +177,38 @@
       return fetch(path, opts).then(r => r.json());
     }
 
-    async function login() {
-      const pw = document.getElementById('adminPassword').value;
+    async function login(passwordOverride) {
+      const pw = passwordOverride || document.getElementById('adminPassword').value;
+      if (!pw) return;
       adminToken = pw;
       try {
         const result = await api('GET', '/api/admin/tokens');
         if (result.error) throw new Error(result.error);
+        localStorage.setItem('never_admin_pw', pw);
         document.getElementById('loginOverlay').classList.add('hidden');
         document.getElementById('mainContent').classList.remove('hidden');
         loadTokens();
       } catch (e) {
-        document.getElementById('loginError').textContent = 'Hatalı şifre!';
+        if (!passwordOverride) {
+          document.getElementById('loginError').textContent = 'Hatalı şifre!';
+        }
+        localStorage.removeItem('never_admin_pw');
         adminToken = '';
       }
     }
+
+    function logoutAdmin() {
+      localStorage.removeItem('never_admin_pw');
+      adminToken = '';
+      location.reload();
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      const savedPw = localStorage.getItem('never_admin_pw');
+      if (savedPw) {
+        login(savedPw);
+      }
+    });
 
     document.getElementById('adminPassword').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') login();
@@ -238,7 +259,8 @@
           <td><span class="badge ${badgeClass}">${status}</span></td>
           <td>
             ${canExtend ? `<button class="small" onclick="extendToken('${t.id}')">+7 Gün</button> ` : ''}
-            ${canRevoke ? `<button class="small danger" onclick="revokeToken('${t.id}')">İptal</button>` : ''}
+            ${canRevoke ? `<button class="small danger" onclick="revokeToken('${t.id}')">İptal</button> ` : ''}
+            <button class="small danger" style="background:#7f1d1d;" onclick="deleteToken('${t.id}', '${t.label}')">Sil</button>
           </td>
         </tr>`;
       }).join('');
@@ -253,10 +275,18 @@
     }
 
     async function revokeToken(id) {
-      if (!confirm('Bu token iptal edilsin mi? Kullanıcı bir daha giriş yapamaz.')) return;
+      if (!confirm('Bu token iptal edilsin mi? Bu tokenla açık olan uygulama kapatılacaktır.')) return;
       const result = await api('POST', '/api/admin/token/revoke', { id });
       if (result.error) { showToast(result.error, false); return; }
-      showToast('Token iptal edildi!');
+      showToast('Token iptal edildi! Kullanıcı sistemden atılacak.');
+      loadTokens();
+    }
+
+    async function deleteToken(id, label) {
+      if (!confirm(`"${label}" adlı token tamamen silinsin mi? Bu tokenla açık olan HTTP Toolkit kapatılacaktır.`)) return;
+      const result = await api('POST', '/api/admin/token/delete', { id });
+      if (result.error) { showToast(result.error, false); return; }
+      showToast('Token tamamen silindi! Kullanıcı sistemden atılacak.');
       loadTokens();
     }
   </script>

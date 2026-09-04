@@ -80,8 +80,23 @@ export function getAllTokens(): Record<string, unknown>[] {
   );
 }
 
+export function getTokenById(id: string): Record<string, unknown> | undefined {
+  const rows = db.exec(
+    'SELECT * FROM tokens WHERE id = ?',
+    [id]
+  );
+  if (rows.length === 0 || rows[0].values.length === 0) return undefined;
+  return rowToObj(rows[0]);
+}
+
 export function revokeTokenById(id: string): void {
   db.run('UPDATE tokens SET revoked = 1 WHERE id = ?', [id]);
+  saveDb();
+}
+
+export function deleteTokenById(id: string): void {
+  db.run('DELETE FROM tokens WHERE id = ?', [id]);
+  db.run('DELETE FROM usage_log WHERE token_id = ?', [id]);
   saveDb();
 }
 
